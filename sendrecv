@@ -1,0 +1,129 @@
+#!/bin/bash
+
+AUTHOR="Jonathan Heathcote"
+VERSION="0.1"
+
+# Default options
+HISTORY_FILE="$HOME/.sendrecv_history"
+COMPRESS="no"
+DISPLAY_STATUS="yes"
+PORT=1337
+
+
+function help {
+	(
+	echo "$(basename "$0") (sendrecv) v$VERSION by $AUTHOR"
+	echo "send:"
+	echo "    % send [files ...]"
+	echo "  Sends the files specified to the next person to request them or if no"
+	echo "  files specified then sets up a pipe to the next person."
+	echo "recv:"
+	echo "    % recv [machine [target_dir | -]]"
+	echo "  Requests to recieve files from machine. If a target_dir is given then"
+	echo "  the files are placed in a directory named target_dir. If a dash is"
+	echo "  given then the connection is treated as a pipe. If no machine name is"
+	echo "  given then the last used machine name is assumed."
+	) >&2
+}
+
+
+function unknown_command {
+	(
+	echo "Hmm... I'm not sure what utility you're trying to use -- please"
+	echo "name this executable either send or recv!"
+	echo
+	help
+	) >&2
+}
+
+
+function netcat_send {
+	compress | nc -l -p "$PORT" -q 1
+}
+function netcat_recv {
+	nc "$REMOTEHOST" "$PORT" | decompress
+}
+
+
+function compress {
+	if [ "$COMPRESS" == "yes" ]; then
+		gzip --to-stdout -
+	else
+		cat
+	fi
+}
+function decompress {
+	if [ "$COMPRESS" == "yes" ]; then
+		gzip -d --to-stdout -
+	else
+		cat
+	fi
+}
+
+function status_display {
+	if [ "$DISPLAY_STATUS" == "yes" ]; then
+		pv -rtpb -i 0.1
+	else
+		cat
+	fi
+}
+
+
+function input_from_files {
+	tar -c "$@" | status_display
+}
+function output_from_files {
+	status_display | tar -xf -
+}
+
+
+function send_command {
+	if [ -n "$1" -a "$1" != "-" ]; then
+		# Read from a file list
+		input_from_files "$@" | netcat_send
+	else
+		# Read from stdin
+		netcat_send
+	fi
+}
+
+
+function recv_command {
+	if [ -z "$1" ]; then
+		if [ -r "$HISTORY_FILE" ]; then
+			REMOTEHOST="$(tail -n 1 "$HISTORY_FILE")"
+			echo "Using last host: $REMOTEHOST" >&2
+		else
+			echo "Phail: You must specify a hostname!" >&2
+			exit 1
+		fi
+	else
+		export REMOTEHOST="$1"
+		echo "$REMOTEHOST" >> "$HISTORY_FILE"
+		shift
+	fi
+	
+	if [ "$1" == "-" ]; then
+		netcat_recv
+	else
+		if [ -n "$1" ]; then
+			mkdir -p "$1" && cd "$1" || exit 2
+		fi;
+		netcat_recv | output_from_files
+	fi
+}
+
+
+if [ "$1" == "-h" -o "$1" == "--help" ]; then
+	help
+	exit 0
+fi
+
+# Run the appopriate command
+if [ "$(basename "$0")" == "send" ]; then
+	send_command "$@"
+elif [ "$(basename "$0")" == "recv" ]; then
+	recv_command "$@"
+else
+	unknown_command
+fi
